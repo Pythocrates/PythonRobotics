@@ -9,6 +9,7 @@ See Wikipedia article (https://en.wikipedia.org/wiki/A*_search_algorithm)
 
 """
 
+from functools import partial
 import math
 
 import matplotlib.pyplot as plt
@@ -16,8 +17,47 @@ import matplotlib.pyplot as plt
 show_animation = True
 
 
-class AStarPlanner:
+class PPVisualizer:
+    def __init__(self, start, goal, obstacles, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        plt.plot(*obstacles, ".k")
+        plt.plot(*start, "og")
+        plt.plot(*goal, "xb")
+        plt.grid(True)
+        plt.axis("equal")
 
+    @staticmethod
+    def on_position_update(position):
+        plt.plot(*position, "xc")
+        # for stopping simulation with the esc key.
+        plt.gcf().canvas.mpl_connect(
+            'key_release_event',
+            lambda event: [exit(0) if event.key == 'escape' else None]
+        )
+        #if len(closed_set.keys()) % 10 == 0:
+        #plt.pause(0.0001)
+
+    @staticmethod
+    def on_final_path(*path):
+        plt.plot(*path, "-r")
+        plt.pause(0.001)
+        plt.show()
+
+
+class Node:
+    def __init__(self, x, y, cost=0, parent_index=-1, parent=None):
+        self.x = x  # index of grid
+        self.y = y  # index of grid
+        self.cost = cost
+        self.parent_index = parent_index
+        self._parent = parent
+
+    def __str__(self):
+        return str(self.x) + "," + str(self.y) + "," + str(
+            self.cost) + "," + str(self.parent_index)
+
+
+class AStarPlanner:
     def __init__(self, ox, oy, resolution, rr):
         """
         Initialize grid map for a star planning
@@ -36,17 +76,18 @@ class AStarPlanner:
         self.x_width, self.y_width = 0, 0
         self.motion = self.get_motion_model()
         self.calc_obstacle_map(ox, oy)
+        self._handlers = []
 
-    class Node:
-        def __init__(self, x, y, cost, parent_index):
-            self.x = x  # index of grid
-            self.y = y  # index of grid
-            self.cost = cost
-            self.parent_index = parent_index
+        self.Node = partial(Node, parent=self)
 
-        def __str__(self):
-            return str(self.x) + "," + str(self.y) + "," + str(
-                self.cost) + "," + str(self.parent_index)
+    def add_handler(self, handler):
+        self._handlers.append(handler)
+
+    def node_at(self, x, y):
+        return self.Node(
+            self.calc_xy_index(x, self.min_x),
+            self.calc_xy_index(y, self.min_y),
+        )
 
     def planning(self, sx, sy, gx, gy):
         """
@@ -63,19 +104,13 @@ class AStarPlanner:
             ry: y position list of the final path
         """
 
-        start_node = self.Node(self.calc_xy_index(sx, self.min_x),
-                               self.calc_xy_index(sy, self.min_y), 0.0, -1)
-        goal_node = self.Node(self.calc_xy_index(gx, self.min_x),
-                              self.calc_xy_index(gy, self.min_y), 0.0, -1)
+        start_node = self.node_at(sx, sy)
+        goal_node = self.node_at(gx, gy)
 
         open_set, closed_set = dict(), dict()
         open_set[self.calc_grid_index(start_node)] = start_node
 
-        while 1:
-            if len(open_set) == 0:
-                print("Open set is empty..")
-                break
-
+        while open_set:
             c_id = min(
                 open_set,
                 key=lambda o: open_set[o].cost + self.calc_heuristic(goal_node,
@@ -84,15 +119,13 @@ class AStarPlanner:
             current = open_set[c_id]
 
             # show graph
-            if show_animation:  # pragma: no cover
-                plt.plot(self.calc_grid_position(current.x, self.min_x),
-                         self.calc_grid_position(current.y, self.min_y), "xc")
-                # for stopping simulation with the esc key.
-                plt.gcf().canvas.mpl_connect('key_release_event',
-                                             lambda event: [exit(
-                                                 0) if event.key == 'escape' else None])
-                if len(closed_set.keys()) % 10 == 0:
-                    plt.pause(0.001)
+            for handler in self._handlers:
+                handler.on_position_update(
+                    (
+                        self.calc_grid_position(current.x, self.min_x),
+                        self.calc_grid_position(current.y, self.min_y),
+                    )
+                )
 
             if current.x == goal_node.x and current.y == goal_node.y:
                 print("Find goal")
@@ -128,6 +161,9 @@ class AStarPlanner:
                         open_set[n_id] = node
 
         rx, ry = self.calc_final_path(goal_node, closed_set)
+
+        for handler in self._handlers:
+            handler.on_final_path(rx, ry)
 
         return rx, ry
 
@@ -262,20 +298,13 @@ def main():
         ox.append(40.0)
         oy.append(60.0 - i)
 
-    if show_animation:  # pragma: no cover
-        plt.plot(ox, oy, ".k")
-        plt.plot(sx, sy, "og")
-        plt.plot(gx, gy, "xb")
-        plt.grid(True)
-        plt.axis("equal")
-
     a_star = AStarPlanner(ox, oy, grid_size, robot_radius)
-    rx, ry = a_star.planning(sx, sy, gx, gy)
-
     if show_animation:  # pragma: no cover
-        plt.plot(rx, ry, "-r")
-        plt.pause(0.001)
-        plt.show()
+        a_star.add_handler(
+            PPVisualizer(
+                start=(sx, sy), goal=(gx, gy), obstacles=(ox, oy)))
+
+    rx, ry = a_star.planning(sx, sy, gx, gy)
 
 
 if __name__ == '__main__':
