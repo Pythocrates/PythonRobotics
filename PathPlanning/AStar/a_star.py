@@ -35,7 +35,7 @@ class PPVisualizer:
             lambda event: [exit(0) if event.key == 'escape' else None]
         )
         #if len(closed_set.keys()) % 10 == 0:
-        #plt.pause(0.0001)
+        plt.pause(0.0001)
 
     @staticmethod
     def on_final_path(*path):
@@ -45,16 +45,16 @@ class PPVisualizer:
 
 
 class Node:
-    def __init__(self, x, y, cost=0, parent_index=-1, parent=None):
+    def __init__(self, x, y, cost=0, parent_node=None, parent=None):
         self.x = x  # index of grid
         self.y = y  # index of grid
         self.cost = cost
-        self.parent_index = parent_index
+        self.parent_node = parent_node
         self._parent = parent
 
     def __str__(self):
         return str(self.x) + "," + str(self.y) + "," + str(
-            self.cost) + "," + str(self.parent_index)
+            self.cost) + "," + str(self.parent_node)
 
 
 class AStarPlanner:
@@ -79,15 +79,24 @@ class AStarPlanner:
         self._handlers = []
 
         self.Node = partial(Node, parent=self)
+        self._all_nodes = dict()
 
     def add_handler(self, handler):
         self._handlers.append(handler)
 
     def node_at(self, x, y):
-        return self.Node(
-            self.calc_xy_index(x, self.min_x),
-            self.calc_xy_index(y, self.min_y),
-        )
+        x_grid = self.calc_xy_index(x, self.min_x)
+        y_grid = self.calc_xy_index(y, self.min_y)
+        return self.node_at_grid(x_grid, y_grid)
+
+    def node_at_grid(self, x, y):
+        if (x, y) in self._all_nodes:
+            node = self._all_nodes[(x, y)]
+        else:
+            node = self.Node(x, y)
+            self._all_nodes[(x, y)] = node
+
+        return node
 
     def planning(self, sx, sy, gx, gy):
         """
@@ -107,16 +116,19 @@ class AStarPlanner:
         start_node = self.node_at(sx, sy)
         goal_node = self.node_at(gx, gy)
 
-        open_set, closed_set = dict(), dict()
-        open_set[self.calc_grid_index(start_node)] = start_node
+        print(start_node)
+        print(goal_node)
+
+        open_set = [start_node]
+        closed_set = set()
 
         while open_set:
-            c_id = min(
+            print(len(open_set))
+            current = min(
                 open_set,
-                key=lambda o: open_set[o].cost + self.calc_heuristic(goal_node,
-                                                                     open_set[
-                                                                         o]))
-            current = open_set[c_id]
+                key=lambda o: o.cost + self.calc_heuristic(goal_node, o)
+            )
+            print(current)
 
             # show graph
             for handler in self._handlers:
@@ -129,36 +141,45 @@ class AStarPlanner:
 
             if current.x == goal_node.x and current.y == goal_node.y:
                 print("Find goal")
-                goal_node.parent_index = current.parent_index
+                goal_node.parent_node = current.parent_node
                 goal_node.cost = current.cost
                 break
 
             # Remove the item from the open set
-            del open_set[c_id]
+            open_set.remove(current)
 
             # Add it to the closed set
-            closed_set[c_id] = current
+            closed_set.add(current)
+            print(f'Removed --> {len(open_set)} / {len(closed_set)}')
 
             # expand_grid search grid based on motion model
             for i, _ in enumerate(self.motion):
-                node = self.Node(current.x + self.motion[i][0],
-                                 current.y + self.motion[i][1],
-                                 current.cost + self.motion[i][2], c_id)
-                n_id = self.calc_grid_index(node)
+                new_cost = current.cost + self.motion[i][2]
+                #node = self.Node(current.x + self.motion[i][0],
+                #                 current.y + self.motion[i][1],
+                #                 current.cost + self.motion[i][2], current)
+                node = self.node_at_grid(
+                    current.x + self.motion[i][0],
+                    current.y + self.motion[i][1],
+                )
+                print(f'neighbor: {node}')
+                #n_id = self.calc_grid_index(node)
 
                 # If the node is not safe, do nothing
                 if not self.verify_node(node):
                     continue
 
-                if n_id in closed_set:
+                if node in closed_set:
                     continue
 
-                if n_id not in open_set:
-                    open_set[n_id] = node  # discovered a new node
+                if node not in open_set:
+                    open_set.append(node)  # discovered a new node
+                    print(f'added: {node}')
                 else:
-                    if open_set[n_id].cost > node.cost:
+                    if node.cost > new_cost:
                         # This path is the best until now. record it
-                        open_set[n_id] = node
+                        node.cost = new_cost
+                        node.parent_node = current
 
         rx, ry = self.calc_final_path(goal_node, closed_set)
 
@@ -171,12 +192,12 @@ class AStarPlanner:
         # generate final course
         rx, ry = [self.calc_grid_position(goal_node.x, self.min_x)], [
             self.calc_grid_position(goal_node.y, self.min_y)]
-        parent_index = goal_node.parent_index
-        while parent_index != -1:
-            n = closed_set[parent_index]
+        parent_node = goal_node.parent_node
+        while parent_node is not None:
+            n = parent_node
             rx.append(self.calc_grid_position(n.x, self.min_x))
             ry.append(self.calc_grid_position(n.y, self.min_y))
-            parent_index = n.parent_index
+            parent_node = n.parent_node
 
         return rx, ry
 
@@ -304,6 +325,7 @@ def main():
             PPVisualizer(
                 start=(sx, sy), goal=(gx, gy), obstacles=(ox, oy)))
 
+    print('Starting planning')
     rx, ry = a_star.planning(sx, sy, gx, gy)
 
 
