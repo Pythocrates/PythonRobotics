@@ -9,13 +9,18 @@ See Wikipedia article (https://en.wikipedia.org/wiki/A*_search_algorithm)
 
 """
 
+from collections import namedtuple
 from functools import partial
 import math
 import sys
 
 import matplotlib.pyplot as plt
 
+
 show_animation = True
+
+
+Position = namedtuple('Position', 'x y')
 
 
 class PPVisualizer:
@@ -47,42 +52,40 @@ class PPVisualizer:
 
 
 class Node:
-    def __init__(self, x, y, cost=0, previous=None, parent=None):
-        self.x = x  # index of grid
-        self.y = y  # index of grid
+    def __init__(self, grid_position, cost=0, previous=None, parent=None):
+        self._grid_position = grid_position
         self.cost = cost
         self.previous = previous
         self._parent = parent
 
+    @property
+    def grid_position(self):
+        return self._grid_position
+
     def __str__(self):
-        return str(self.x) + "," + str(self.y) + "," + str(
-            self.cost) + "," + str(self.previous)
+        return f'{self.grid_position}, {self.cost}, {self.previous}'
 
     @property
     def position(self):
-        x = self._parent.calc_grid_position(self.x, self._parent.min_x)
-        y = self._parent.calc_grid_position(self.y, self._parent.min_y)
-        return x, y
+        return self._parent.obstacle_map.grid2world(self.grid_position)
+
+    @property
+    def is_ok(self):
+        return self.grid_position in self._parent.obstacle_map
 
 
 class AStarPlanner:
-    def __init__(self, ox, oy, resolution, rr):
+    def __init__(self, ox, oy, resolution, robot_radius):
         """
         Initialize grid map for a star planning
 
         ox: x position list of Obstacles [m]
         oy: y position list of Obstacles [m]
         resolution: grid resolution [m]
-        rr: robot radius[m]
+        robot_radius: robot radius[m]
         """
 
-        self.resolution = resolution
-        self.rr = rr
-        self.min_x, self.min_y = 0, 0
-        self.max_x, self.max_y = 0, 0
-        self.obstacle_map = None
-        self.calc_obstacle_map(ox, oy)
-        self.x_width, self.y_width = 0, 0
+        self.obstacle_map = ObstacleMap(ox, oy, resolution, robot_radius)
         self.motion = self.get_motion_model()
         self._handlers = []
 
@@ -92,21 +95,20 @@ class AStarPlanner:
     def add_handler(self, handler):
         self._handlers.append(handler)
 
-    def node_at(self, x, y):
-        x_grid = self.calc_xy_index(x, self.min_x)
-        y_grid = self.calc_xy_index(y, self.min_y)
-        return self.node_at_grid(x_grid, y_grid)
+    def node_at(self, world_position):
+        grid_position = self.obstacle_map.world2grid(world_position)
+        return self.node_at_grid(grid_position)
 
-    def node_at_grid(self, x, y):
+    def node_at_grid(self, grid_position):
         try:
-            node = self._all_nodes[(x, y)]
+            node = self._all_nodes[grid_position]
         except KeyError:
-            node = self.Node(x, y)
-            self._all_nodes[(x, y)] = node
+            node = self.Node(grid_position)
+            self._all_nodes[grid_position] = node
 
         return node
 
-    def planning(self, sx, sy, gx, gy):
+    def planning(self, start_position, goal_position):
         """
         A star path search
 
@@ -121,8 +123,8 @@ class AStarPlanner:
             ry: y position list of the final path
         """
 
-        start_node = self.node_at(sx, sy)
-        goal_node = self.node_at(gx, gy)
+        start_node = self.node_at(start_position)
+        goal_node = self.node_at(goal_position)
 
         open_set = {start_node}
         closed_set = set()
@@ -148,12 +150,14 @@ class AStarPlanner:
             for motion in self.motion:
                 new_cost = current.cost + motion[2]
                 node = self.node_at_grid(
-                    current.x + motion[0],
-                    current.y + motion[1],
+                    Position(
+                        current.grid_position.x + motion[0],
+                        current.grid_position.y + motion[1],
+                    )
                 )
 
                 # If the node is not safe, do nothing
-                if not self.verify_node(node):
+                if not node.is_ok:
                     continue
 
                 if node in closed_set:
@@ -192,67 +196,10 @@ class AStarPlanner:
     @staticmethod
     def calc_heuristic(n1, n2):
         w = 1.0  # weight of heuristic
-        d = w * math.hypot(n1.x - n2.x, n1.y - n2.y)
+        pos_1 = n1.grid_position
+        pos_2 = n2.grid_position
+        d = w * math.hypot(pos_1.x - pos_2.x, pos_1.y - pos_2.y)
         return d
-
-    def calc_grid_position(self, index, min_position):
-        """
-        calc grid position
-
-        :param index:
-        :param min_position:
-        :return:
-        """
-        pos = index * self.resolution + min_position
-        return pos
-
-    def calc_xy_index(self, position, min_pos):
-        return round((position - min_pos) / self.resolution)
-
-    def calc_grid_index(self, node):
-        return (node.y - self.min_y) * self.x_width + (node.x - self.min_x)
-
-    def verify_node(self, node):
-        px, py = node.position
-
-        if not self.min_x <= px <= self.max_x:
-            return False
-        elif not self.min_y <= py <= self.max_y:
-            return False
-        elif self.obstacle_map[node.x][node.y]:
-            # collision check
-            return False
-
-        return True
-
-    def calc_obstacle_map(self, ox, oy):
-
-        self.min_x = round(min(ox))
-        self.min_y = round(min(oy))
-        self.max_x = round(max(ox))
-        self.max_y = round(max(oy))
-        print("min_x:", self.min_x)
-        print("min_y:", self.min_y)
-        print("max_x:", self.max_x)
-        print("max_y:", self.max_y)
-
-        self.x_width = round((self.max_x - self.min_x) / self.resolution)
-        self.y_width = round((self.max_y - self.min_y) / self.resolution)
-        print("x_width:", self.x_width)
-        print("y_width:", self.y_width)
-
-        # obstacle map generation
-        self.obstacle_map = [[False for _ in range(self.y_width)]
-                             for _ in range(self.x_width)]
-        for ix in range(self.x_width):
-            x = self.calc_grid_position(ix, self.min_x)
-            for iy in range(self.y_width):
-                y = self.calc_grid_position(iy, self.min_y)
-                for iox, ioy in zip(ox, oy):
-                    d = math.hypot(iox - x, ioy - y)
-                    if d <= self.rr:
-                        self.obstacle_map[ix][iy] = True
-                        break
 
     @staticmethod
     def get_motion_model():
@@ -269,14 +216,61 @@ class AStarPlanner:
         return motion
 
 
+class ObstacleMap:
+    def __init__(self, ox, oy, resolution, robot_radius):
+        self.min_x = round(min(ox))
+        self.min_y = round(min(oy))
+        self.max_x = round(max(ox))
+        self.max_y = round(max(oy))
+        self.left_bottom = Position(self.min_x, self.min_y)
+        self.right_top = Position(self.max_x, self.max_y)
+        self.resolution = resolution
+        self._grid = self._calc_obstacle_map(ox, oy, robot_radius)
+
+    def grid2world(self, grid_position):
+        wx = grid_position.x * self.resolution + self.min_x
+        wy = grid_position.y * self.resolution + self.min_y
+        return Position(wx, wy)
+
+    def world2grid(self, world_position):
+        gx = round((world_position.x - self.min_x) / self.resolution)
+        gy = round((world_position.y - self.min_y) / self.resolution)
+        return Position(gx, gy)
+
+    def __contains__(self, grid_position):
+        px, py = self.grid2world(grid_position)
+        if not self.min_x <= px < self.max_x:
+            return False
+        elif not self.min_y <= py < self.max_y:
+            return False
+        elif self._grid[grid_position.x][grid_position.y]:
+            # collision check
+            return False
+
+        return True
+
+    def _calc_obstacle_map(self, ox, oy, robot_radius):
+        width, height = self.world2grid(self.right_top)
+
+        # obstacle map generation
+        grid = [[False for _ in range(height)] for _ in range(width)]
+        for x_g in range(width):
+            for y_g in range(height):
+                x_w, y_w = self.grid2world(Position(x_g, y_g))
+                for x_og, y_og in zip(ox, oy):
+                    distance = math.hypot(x_og - x_w, y_og - y_w)
+                    if distance <= robot_radius:
+                        grid[x_g][y_g] = True
+                        break
+
+        return grid
+
+
 def main():
     print(__file__ + " start!!")
 
-    # start and goal position
-    sx = 10.0  # [m]
-    sy = 10.0  # [m]
-    gx = 50.0  # [m]
-    gy = 50.0  # [m]
+    start_position = Position(10.0, 10.0)  # world coordinates in m
+    goal_position = Position(50.0, 50.0)  # world coordinates im m
     grid_size = 2.0  # [m]
     robot_radius = 1.0  # [m]
 
@@ -304,10 +298,10 @@ def main():
     a_star = AStarPlanner(ox, oy, grid_size, robot_radius)
     if show_animation:  # pragma: no cover
         a_star.add_handler(
-            PPVisualizer(start=(sx, sy), goal=(gx, gy), obstacles=(ox, oy)))
+            PPVisualizer(start=start_position, goal=goal_position, obstacles=(ox, oy)))
 
     print('Starting planning')
-    a_star.planning(sx, sy, gx, gy)
+    a_star.planning(start_position, goal_position)
 
 
 if __name__ == '__main__':
